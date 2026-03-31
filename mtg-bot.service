@@ -1,0 +1,15 @@
+[Unit]
+Description=MTProto Telegram Bot
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mtg-bot
+EnvironmentFile=/opt/mtg-bot/.env
+ExecStart=/opt/mtg-bot/venv/bin/python /opt/mtg-bot/mtg_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
