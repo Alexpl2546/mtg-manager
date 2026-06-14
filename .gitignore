@@ -1,0 +1,16 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+.audit_extract/
+*.tar.gz
+telemt-audit.txt
+
+data/*.json
+data/mtg-clients/
+*.bak
+*.tmp
+*~

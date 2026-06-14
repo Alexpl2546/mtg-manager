@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ $# -ne 4 ]]; then
-  echo "ERROR=invalid_arguments"
-  echo "USAGE=$0 <container_name> <workdir> <port> <domain>"
+if [ "$#" -ne 4 ]; then
+  echo "Usage: $0 <container_name> <workdir> <port> <domain>" >&2
   exit 1
 fi
 
@@ -12,72 +11,39 @@ WORKDIR="$2"
 PORT="$3"
 DOMAIN="$4"
 
-INTERNAL_PORT="3128"
-IMAGE="nineseconds/mtg:2"
-CONFIG_PATH="$WORKDIR/config.toml"
-
-command -v docker >/dev/null 2>&1 || {
-  echo "ERROR=docker_not_found"
-  exit 1
-}
-
-command -v ss >/dev/null 2>&1 || {
-  echo "ERROR=ss_not_found"
-  exit 1
-}
-
-if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-  echo "ERROR=invalid_port"
-  exit 1
-fi
-
-if (( PORT < 1 || PORT > 65535 )); then
-  echo "ERROR=invalid_port_range"
-  exit 1
-fi
-
-if ss -tuln | awk '{print $5}' | grep -Eq "(^|:)$PORT$"; then
-  echo "ERROR=port_in_use"
-  exit 1
-fi
-
-if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
-  echo "ERROR=container_exists"
-  exit 1
-fi
-
 mkdir -p "$WORKDIR"
 
-SECRET_HEX="$(docker run --rm "$IMAGE" generate-secret --hex "$DOMAIN" | tr -d '\r\n')"
+SECRET_HEX="$(docker run --rm nineseconds/mtg:2 generate-secret --hex "$DOMAIN")"
 
-cat > "$CONFIG_PATH" <<EOF
+cat > "$WORKDIR/config.toml" <<EOF
 secret = "$SECRET_HEX"
-bind-to = "0.0.0.0:${INTERNAL_PORT}"
+bind-to = "0.0.0.0:3128"
 EOF
+
+docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
-  -v "$CONFIG_PATH:/config.toml:ro" \
-  -p "${PORT}:${INTERNAL_PORT}" \
-  "$IMAGE" \
+  -v "$WORKDIR/config.toml:/config.toml:ro" \
+  -p "${PORT}:3128/tcp" \
+  nineseconds/mtg:2 \
   run /config.toml >/dev/null
 
-sleep 2
+ACCESS_JSON="$(docker exec "$CONTAINER_NAME" /mtg access /config.toml)"
 
-ACCESS="$(docker exec "$CONTAINER_NAME" /mtg access /config.toml)"
-TG_URL="$(printf '%s\n' "$ACCESS" | grep '"tg_url"' | head -n1 | cut -d '"' -f4)"
-TG_URL_FIXED="$(printf '%s' "$TG_URL" | sed "s/port=${INTERNAL_PORT}/port=${PORT}/")"
+TG_URL="$(printf '%s' "$ACCESS_JSON" | python3 -c '
+import sys, json
+data = json.load(sys.stdin)
+print(data["ipv4"]["tg_url"])
+')"
 
-if [[ -z "$TG_URL_FIXED" ]]; then
-  echo "ERROR=failed_to_get_tg_url"
-  docker logs "$CONTAINER_NAME" || true
-  exit 1
-fi
+# заменяем порт 3128 на внешний
+TG_URL="$(echo "$TG_URL" | sed "s/port=3128/port=${PORT}/")"
 
 echo "STATUS=OK"
-echo "TG_URL=$TG_URL_FIXED"
-echo "PORT=$PORT"
 echo "CONTAINER=$CONTAINER_NAME"
 echo "WORKDIR=$WORKDIR"
+echo "PORT=$PORT"
 echo "DOMAIN=$DOMAIN"
+echo "TG_URL=$TG_URL"
