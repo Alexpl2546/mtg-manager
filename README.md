@@ -1,259 +1,107 @@
-# MTProto Proxy Bot
+# Proxy Manager
 
-Telegram-бот для управления MTProto-прокси через Docker.
+Telegram-бот для управления MTProto/MTG, Telemt, HTTP и SOCKS5-прокси.
 
-Проект предназначен для быстрого и удобного создания прокси для пользователей с полным управлением через интерфейс Telegram без ручной работы с сервером.
+## Безопасность
 
----
+- Доступ разрешён только Telegram ID из `ADMIN_IDS`.
+- Токены, клиентские базы и прокси-секреты не хранятся в Git.
+- Рабочие JSON-файлы записываются атомарно.
+- Сервису необходим ограниченный доступ к Docker, systemd, Telemt и 3proxy.
 
-## 🚀 Основные возможности
+## Конфигурация
 
-- Создание MTProto-прокси через Telegram
-- Автоматическое выделение свободных портов
-- Хранение клиентов в локальной базе (JSON)
-- Просмотр клиентов через кнопки
-- Получение ссылки подключения в один клик
-- Удаление клиентов с подтверждением
-- Смена домена генерации секретов
-- Автоматическое управление Docker-контейнерами
+Создайте `/opt/proxy-manager/.env`:
 
----
-
-## 📁 Структура проекта
-
-```
-mtg-bot/
-├── bot.py                     # основной код бота
-├── requirements.txt          # зависимости Python
-├── scripts/
-│   ├── install-mtproto.sh    # создание прокси
-│   └── delete-mtproto.sh     # удаление прокси
-├── data/
-│   ├── clients.json.example  # шаблон базы клиентов
-│   └── settings.json.example # шаблон настроек
-├── .gitignore
-└── README.md
+```dotenv
+BOT_TOKEN=telegram_bot_token
+ADMIN_IDS=301615601
 ```
 
----
+Несколько администраторов указываются через запятую.
 
-## ⚙️ Требования
-
-Перед началом убедись, что у тебя есть:
-
-- Linux сервер (Ubuntu / Debian)
-- Python 3.10+
-- Docker установлен и запущен
-- Открытые порты на сервере
-
----
-
-## 📦 Установка
-
-### 1. Клонирование
+Создайте рабочие настройки:
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
-cd mtg-bot
+cp data/settings.json.example data/settings.json
 ```
 
----
+Поля `http.host` и `socks5.host` должны содержать публичный адрес сервера.
 
-### 2. Виртуальное окружение
+## Запуск
 
 ```bash
 python3 -m venv venv
-source venv/bin/activate
+venv/bin/pip install -r requirements.txt
+set -a
+source .env
+set +a
+venv/bin/python bot.py
 ```
 
----
+Для production используйте systemd и отдельного системного пользователя.
 
-### 3. Установка зависимостей
+## Telemt
+
+Менеджер использует официальный Telemt Control API. Создание и удаление
+пользователей выполняется атомарно и не требует перезапуска Telemt.
+
+Не изменяйте `censorship.tls_domain` на работающей установке: существующие
+Fake TLS ссылки используют старый домен и перестанут подключаться.
+
+Безопасное обновление Telemt:
 
 ```bash
-pip install -r requirements.txt
+sudo bash scripts/audit-telemt.sh
+sudo bash scripts/upgrade-telemt.sh 3.4.18
+sudo bash scripts/harden-telemt.sh
 ```
 
----
+Скрипт обновления проверяет SHA-256 официального релиза, сохраняет бинарник,
+конфигурацию и unit-файл в `/var/backups/telemt/`, проверяет readiness и
+автоматически откатывается при ошибке.
 
-## 🔐 Настройка (ВАЖНО)
+Скрипт hardening добавляет рекомендованные upstream capabilities
+`CAP_NET_ADMIN` и `CAP_NET_BIND_SERVICE`, включает `NoNewPrivileges` и
+устанавливает `show_link = []`, чтобы действующие ссылки не попадали в journald.
 
-В проекте есть файлы, которые не хранятся в Git по соображениям безопасности.
+## Данные
 
----
+Рабочие файлы создаются в `data/`:
 
-### 1. `.env` — токен Telegram-бота
+- `mtg_clients.json`
+- `telemt_clients.json`
+- `http_clients.json`
+- `socks5_clients.json`
+- `settings.json`
 
-Создай файл:
+Эти файлы могут содержать пароли и действующие ссылки доступа. Не добавляйте их
+в Git, включая приватные репозитории.
+
+## Тесты
 
 ```bash
-nano .env
+pip install -r requirements-dev.txt
+pytest
 ```
 
-Добавь туда:
+## Развёртывание
 
-```
-<TELEGRAM_BOT_TOKEN>
-```
-
-Пример:
-
-```
-123456789:AAExampleToken
-```
-
-📌 Получить токен можно через BotFather в Telegram.
-
----
-
-### 2. `data/clients.json` — база клиентов
-
-Создаётся из шаблона:
+Архив релиза не должен содержать `.env` или рабочие `data/*.json`.
 
 ```bash
-cp data/clients.json.example data/clients.json
+sudo bash scripts/deploy-proxy-manager.sh /tmp/proxy-manager-release.tar.gz
 ```
 
-Содержимое:
+Перед заменой файлов скрипт проверяет JSON, создаёт backup в
+`/var/backups/proxy-manager/`, устанавливает зависимости в `venv`, проверяет
+Telemt API и автоматически откатывает проект при ошибке запуска.
 
-```json
-{}
-```
-
-📌 Особенности:
-- файл автоматически заполняется ботом
-- содержит все созданные прокси
-- не должен попадать в Git
-
----
-
-### 3. `data/settings.json` — настройки домена
-
-Создание:
+Сверка локальной базы с Telemt ничего не изменяет:
 
 ```bash
-cp data/settings.json.example data/settings.json
+set -a
+source /opt/proxy-manager/.env
+set +a
+python3 scripts/reconcile-telemt.py
 ```
-
-Пример:
-
-```json
-{
-  "domain": "ajax.googleapis.com"
-}
-```
-
-📌 Особенности:
-- если файл отсутствует — создаётся автоматически
-- используется для генерации новых прокси
-- можно менять через бота
-
----
-
-## ▶️ Запуск
-
-```bash
-python bot.py
-```
-
----
-
-## 🔁 Запуск как сервис (systemd)
-
-Создай сервис:
-
-```bash
-nano /etc/systemd/system/mtg-bot.service
-```
-
-Содержимое:
-
-```ini
-[Unit]
-Description=MTProto Telegram Bot
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/mtg-bot
-ExecStart=/opt/mtg-bot/venv/bin/python /opt/mtg-bot/bot.py
-Restart=always
-RestartSec=3
-User=root
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Запуск:
-
-```bash
-systemctl daemon-reload
-systemctl enable mtg-bot
-systemctl start mtg-bot
-```
-
-Проверка:
-
-```bash
-systemctl status mtg-bot
-```
-
----
-
-## 🧠 Как это работает
-
-1. Ты создаёшь клиента через Telegram
-2. Бот:
-   - генерирует порт
-   - создаёт Docker-контейнер
-   - генерирует MTProto-секрет
-3. Сохраняет данные в `clients.json`
-4. Отдаёт готовую ссылку подключения
-
----
-
-## ⚠️ Безопасность
-
-Не добавляй в Git:
-
-- `.env`
-- `data/clients.json`
-
-Они уже исключены через `.gitignore`.
-
----
-
-## ⚡ Быстрый старт
-
-```bash
-cp data/clients.json.example data/clients.json
-cp data/settings.json.example data/settings.json
-nano .env
-python bot.py
-```
-
----
-
-## 📌 Примечания
-
-- имена клиентов автоматически приводятся к нижнему регистру
-- разрешены только символы: `a-z`, `0-9`, `_`, `-`
-- каждый клиент = отдельный Docker-контейнер
-- порты не пересекаются
-
----
-
-## 📈 Возможные улучшения
-
-- автоматический деплой одной командой
-- мониторинг контейнеров
-- резервное копирование
-- web-интерфейс
-
----
-
-## 🧾 Лицензия
-
-Используется в образовательных и практических целях.

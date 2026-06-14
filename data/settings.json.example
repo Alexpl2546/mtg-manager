@@ -1,3 +1,17 @@
 {
-  "domain": "ajax.googleapis.com"
+  "mtg": {
+    "domain": "ajax.googleapis.com"
+  },
+  "telemt": {
+    "domain": "www.google.com",
+    "port": 8443
+  },
+  "http": {
+    "host": "203.0.113.10",
+    "port": 3129
+  },
+  "socks5": {
+    "host": "203.0.113.10",
+    "port": 3130
+  }
 }

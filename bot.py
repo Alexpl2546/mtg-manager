@@ -1,655 +1,446 @@
 import asyncio
-import json
-import random
-import re
-import socket
-import subprocess
-from datetime import datetime
-from pathlib import Path
+import logging
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
-from aiogram.types import (
-    Message,
-    CallbackQuery,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
+from aiogram import Bot, Dispatcher
+from aiogram.filters import CommandStart
+from aiogram.types import CallbackQuery, Message
+
+from config import load_settings as load_app_settings
+from providers.http_manager import HTTPProvider
+from providers.mtg_manager import MTGProvider
+from providers.socks5_manager import SOCKS5Provider
+from providers.telemt_manager import TelemtProvider
+from utils.auth import AdminOnlyMiddleware
+from utils.keyboards import (
+    action_keyboard,
+    delete_confirm_keyboard,
+    domain_inline_keyboard,
+    names_inline_keyboard,
+    protocol_keyboard,
 )
+from utils.state import (
+    get_action,
+    get_protocol,
+    reset_action,
+    set_action,
+    set_protocol,
+)
+from utils.storage import load_settings, save_settings
+from utils.validation import normalize_client_name, validate_client_name
 
-TOKEN = Path(".env").read_text(encoding="utf-8").strip()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-CLIENTS_FILE = DATA_DIR / "clients.json"
-SETTINGS_FILE = DATA_DIR / "settings.json"
-
-INSTALL_SCRIPT = BASE_DIR / "scripts" / "install-mtproto.sh"
-DELETE_SCRIPT = BASE_DIR / "scripts" / "delete-mtproto.sh"
-
-DEFAULT_DOMAIN = "ajax.googleapis.com"
-DOMAIN_PRESETS = [
-    "ajax.googleapis.com",
-    "cdn.jsdelivr.net",
-    "www.cloudflare.com",
-    "fonts.googleapis.com",
-]
-
-bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-pending_actions: dict[int, str] = {}
+PROVIDERS = {
+    "MTProto": MTGProvider(),
+    "Telemt": TelemtProvider(),
+    "HTTP": HTTPProvider(),
+    "SOCKS5": SOCKS5Provider(),
+}
 
 
-def main_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Новый прокси"), KeyboardButton(text="👥 Клиенты")],
-            [KeyboardButton(text="🌐 Домен")],
-            [KeyboardButton(text="🗑 Удалить"), KeyboardButton(text="❓ Помощь")],
-        ],
-        resize_keyboard=True,
-        input_field_placeholder="Выбери действие",
-    )
-
-
-def domain_menu() -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text=domain, callback_data=f"set_domain:{domain}")]
-        for domain in DOMAIN_PRESETS
-    ]
-    buttons.append([InlineKeyboardButton(text="✏️ Ввести домен вручную", callback_data="change_domain_manual")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def delete_clients_menu() -> InlineKeyboardMarkup:
-    clients = load_clients()
-    if not clients:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Клиентов нет", callback_data="noop")]]
-        )
-
-    buttons = []
-    for name in sorted(clients.keys()):
-        buttons.append([InlineKeyboardButton(text=name, callback_data=f"delete_client:{name}")])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def delete_confirm_menu(client_name: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Подтвердить удаление", callback_data=f"confirm_delete:{client_name}")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_delete")],
-        ]
-    )
-
-
-def clients_menu() -> InlineKeyboardMarkup:
-    clients = load_clients()
-    if not clients:
-        return InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Клиентов нет", callback_data="noop")]]
-        )
-
-    buttons = []
-    for name in sorted(clients.keys()):
-        buttons.append([InlineKeyboardButton(text=name, callback_data=f"show_client:{name}")])
-
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def ensure_storage() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not CLIENTS_FILE.exists():
-        CLIENTS_FILE.write_text("{}", encoding="utf-8")
-
-    if not SETTINGS_FILE.exists():
-        SETTINGS_FILE.write_text(
-            json.dumps({"domain": DEFAULT_DOMAIN}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-
-def load_clients() -> dict:
-    ensure_storage()
-    return json.loads(CLIENTS_FILE.read_text(encoding="utf-8"))
-
-
-def save_clients(data: dict) -> None:
-    ensure_storage()
-    CLIENTS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def load_settings() -> dict:
-    ensure_storage()
-    data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    data.setdefault("domain", DEFAULT_DOMAIN)
-    return data
-
-
-def save_settings(data: dict) -> None:
-    ensure_storage()
-    SETTINGS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def normalize_name(name: str) -> str:
-    name = name.strip().lower()
-    name = re.sub(r"\s+", "_", name)
-    return name
-
-
-def validate_name(name: str) -> bool:
-    return bool(re.fullmatch(r"[a-z0-9_\-]{2,40}", name))
-
-
-def validate_domain(domain: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9.-]{3,253}", domain))
-
-
-def is_port_free(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.2)
-        return s.connect_ex(("127.0.0.1", port)) != 0
-
-
-def get_random_port() -> int:
-    return random.randint(20000, 40000)
-
-
-def get_free_port(clients: dict) -> int:
-    used_ports = {item["port"] for item in clients.values()}
-    for _ in range(500):
-        port = get_random_port()
-        if port not in used_ports and is_port_free(port):
-            return port
-    raise RuntimeError("Не удалось подобрать свободный порт")
-
-
-def create_proxy_for_client(client_name: str) -> dict:
-    clients = load_clients()
-    settings = load_settings()
-
-    if client_name in clients:
-        raise RuntimeError(f"Клиент '{client_name}' уже существует")
-
-    port = get_free_port(clients)
-    container_name = f"mtg-{client_name}"
-    workdir = f"/opt/mtg-clients/{client_name}"
-    domain = settings["domain"]
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(INSTALL_SCRIPT),
-            container_name,
-            workdir,
-            str(port),
-            domain,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Ошибка создания прокси.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        )
-
-    parsed = {}
-    for line in result.stdout.splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            parsed[key.strip()] = value.strip()
-
-    if parsed.get("STATUS") != "OK" or "TG_URL" not in parsed:
-        raise RuntimeError(f"Неожиданный вывод скрипта:\n{result.stdout}")
-
-    clients[client_name] = {
-        "name": client_name,
-        "container_name": parsed["CONTAINER"],
-        "workdir": parsed["WORKDIR"],
-        "port": int(parsed["PORT"]),
-        "domain": parsed["DOMAIN"],
-        "tg_url": parsed["TG_URL"],
-        "created_at": datetime.utcnow().isoformat() + "Z",
-    }
-    save_clients(clients)
-
-    return clients[client_name]
-
-
-def delete_proxy_for_client(client_name: str) -> dict:
-    clients = load_clients()
-
-    if client_name not in clients:
-        raise RuntimeError(f"Клиент '{client_name}' не найден")
-
-    client = clients[client_name]
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(DELETE_SCRIPT),
-            client["container_name"],
-            client["workdir"],
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Ошибка удаления прокси.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        )
-
-    del clients[client_name]
-    save_clients(clients)
-
-    return client
-
-
-async def send_help(message: Message):
+# =========================
+# START
+# =========================
+@dp.message(CommandStart())
+async def start(message: Message):
     await message.answer(
-        "Бот управления MTProto.\n\n"
-        "Кнопки:\n"
-        "➕ Новый прокси — создать клиента\n"
-        "👥 Клиенты — список клиентов\n"
-        "🌐 Домен — текущий домен и смена домена\n"
-        "🗑 Удалить — удалить клиента\n"
-        "❓ Помощь — справка\n\n"
-        "Команды:\n"
-        "/newproxy\n"
-        "/list\n"
-        "/domain\n"
-        "/setdomain <домен>\n"
-        "/show <имя>\n"
-        "/delete <имя>",
-        reply_markup=main_menu(),
+        "Выбери протокол:",
+        reply_markup=protocol_keyboard()
     )
 
 
-async def send_clients_list(message: Message):
-    clients = load_clients()
+# =========================
+# ВЫБОР ПРОТОКОЛА
+# =========================
+@dp.message(lambda m: m.text in PROVIDERS.keys())
+async def choose_protocol(message: Message):
+    protocol = message.text
+    set_protocol(message.from_user.id, protocol)
 
-    if not clients:
-        await message.answer("Список клиентов пуст.", reply_markup=main_menu())
+    await message.answer(
+        f"Выбран протокол: {protocol}",
+        reply_markup=action_keyboard(protocol)
+    )
+
+
+# =========================
+# СМЕНА ПРОТОКОЛА
+# =========================
+@dp.message(lambda m: m.text == "⬅️ Сменить протокол")
+async def change_protocol(message: Message):
+    set_protocol(message.from_user.id, None)
+    reset_action(message.from_user.id)
+    await message.answer(
+        "Выбери протокол:",
+        reply_markup=protocol_keyboard()
+    )
+
+# =========================
+# СОЗДАНИЕ КЛИЕНТА
+# =========================
+@dp.message(lambda m: m.text == "➕ Новый прокси")
+async def create_proxy(message: Message):
+    protocol = get_protocol(message.from_user.id)
+
+    if not protocol:
+        await message.answer("Сначала выбери протокол")
         return
+
+    set_action(message.from_user.id, "create")
+
+    await message.answer("Введи имя клиента:")
+
+@dp.message(lambda m: get_action(m.from_user.id) == "create")
+async def handle_create(message: Message):
+    name = normalize_client_name(message.text)
+    protocol = get_protocol(message.from_user.id)
+
+    if not protocol:
+        reset_action(message.from_user.id)
+        await message.answer("Сначала выбери протокол", reply_markup=protocol_keyboard())
+        return
+
+    if not validate_client_name(name):
+        await message.answer(
+            "Некорректное имя. Используй 2–40 символов: a-z, 0-9, дефис или подчёркивание."
+        )
+        return
+
+    provider = PROVIDERS[protocol]
+
+    try:
+        client = await asyncio.to_thread(provider.create_client, name)
+    except ValueError as exc:
+        reset_action(message.from_user.id)
+        await message.answer(f"Ошибка: {exc}", reply_markup=action_keyboard(protocol))
+        return
+    except Exception:
+        logger.exception("Failed to create %s client %s", protocol, name)
+        reset_action(message.from_user.id)
+        await message.answer(
+            "Не удалось создать клиента. Подробности записаны в журнал сервиса.",
+            reply_markup=action_keyboard(protocol),
+        )
+        return
+
+    reset_action(message.from_user.id)
+
+    if protocol in ("MTProto", "Telemt"):
+        tg_url = client.get("tg_url") or "Ссылка пока не получена"
+        text = (
+            f"Имя: {name}\n"
+            f"Порт: {client.get('port')}\n"
+            f"Домен: {client.get('domain')}\n"
+            f"Ссылка: {tg_url}"
+        )
+    else:
+        host = client.get("host")
+        port = client.get("port")
+        username = client.get("username")
+        password = client.get("password")
+
+        text = (
+            f"Имя: {name}\n"
+            f"Логин: {username}\n"
+            f"Пароль: {password}\n"
+            f"Адрес: {host}:{port}"
+        )
+
+    if protocol == "SOCKS5":
+        tg_link = f"tg://socks?server={host}&port={port}&user={username}&pass={password}"
+        text += f"\nСсылка: {tg_link}"
+
+    await message.answer(text, reply_markup=action_keyboard(protocol))
+
+# =========================
+# СПИСОК КЛИЕНТОВ
+# =========================
+@dp.message(lambda m: m.text == "👥 Клиенты")
+async def list_clients(message: Message):
+    protocol = get_protocol(message.from_user.id)
+
+    if not protocol:
+        await message.answer("Сначала выбери протокол")
+        return
+
+    provider = PROVIDERS[protocol]
+    clients = provider.list_clients()
 
     await message.answer(
         "Выбери клиента:",
-        reply_markup=main_menu(),
-    )
-    await message.answer(
-        "Список клиентов:",
-        reply_markup=clients_menu(),
+        reply_markup=names_inline_keyboard(list(clients.keys()), "show")
     )
 
 
-async def send_ports_list(message: Message):
-    clients = load_clients()
-
-    if not clients:
-        await message.answer("Занятых портов нет.", reply_markup=main_menu())
-        return
-
-    ports = sorted({data["port"] for data in clients.values()})
-    text = "Занятые порты:\n" + "\n".join(str(port) for port in ports)
-    await message.answer(text, reply_markup=main_menu())
-
-
-async def send_domain_info(message: Message):
-    settings = load_settings()
-    await message.answer(
-        f"Текущий домен для новых прокси:\n{settings['domain']}",
-        reply_markup=main_menu(),
-    )
-    await message.answer(
-        "Выбери домен кнопкой ниже или введи свой вручную.",
-        reply_markup=domain_menu(),
-    )
-
-
-async def show_client_info(message: Message, client_name: str):
-    clients = load_clients()
-
-    if client_name not in clients:
-        await message.answer("Клиент не найден.", reply_markup=main_menu())
-        return
-
-    client = clients[client_name]
-    await message.answer(
-        f"Имя пользователя: {client['name']}\n"
-        f"Порт: {client['port']}\n"
-        f"Домен: {client['domain']}\n"
-        f"Ссылка: {client['tg_url']}",
-        reply_markup=main_menu(),
-    )
-
-
-@dp.message(Command("start"))
-async def cmd_start(message: Message):
-    await send_help(message)
-
-
-@dp.message(Command("help"))
-async def cmd_help(message: Message):
-    await send_help(message)
-
-
-@dp.message(Command("list"))
-async def cmd_list(message: Message):
-    await send_clients_list(message)
-
-
-@dp.message(Command("ports"))
-async def cmd_ports(message: Message):
-    await send_ports_list(message)
-
-
-@dp.message(Command("domain"))
-async def cmd_domain(message: Message):
-    await send_domain_info(message)
-
-
-@dp.message(Command("setdomain"))
-async def cmd_setdomain(message: Message):
-    parts = message.text.split(maxsplit=1)
-
-    if len(parts) != 2:
-        await message.answer("Использование: /setdomain <домен>", reply_markup=main_menu())
-        return
-
-    domain = parts[1].strip().lower()
-
-    if not validate_domain(domain):
-        await message.answer("Некорректный домен.", reply_markup=main_menu())
-        return
-
-    settings = load_settings()
-    settings["domain"] = domain
-    save_settings(settings)
-
-    await message.answer(
-        f"Домен для новых прокси обновлён:\n{domain}\n\n"
-        "Уже созданные прокси не изменяются.",
-        reply_markup=main_menu(),
-    )
-
-
-@dp.message(Command("newproxy"))
-async def cmd_newproxy(message: Message):
-    pending_actions[message.from_user.id] = "waiting_client_name"
-    await message.answer(
-        "Введи имя нового клиента.\n"
-        "Оно будет сохранено в нижнем регистре.\n"
-        "Допустимы латинские буквы (a-z), цифры, дефис и подчёркивание.",
-        reply_markup=main_menu(),
-    )
-
-
-@dp.message(Command("show"))
-async def cmd_show(message: Message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) != 2:
-        await message.answer("Использование: /show <имя>", reply_markup=main_menu())
-        return
-
-    client_name = normalize_name(parts[1])
-    await show_client_info(message, client_name)
-
-
-@dp.message(Command("delete"))
-async def cmd_delete(message: Message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) == 2:
-        client_name = normalize_name(parts[1])
-        clients = load_clients()
-
-        if client_name not in clients:
-            await message.answer("Клиент не найден.", reply_markup=main_menu())
-            return
-
-        await message.answer(
-            f"Ты точно хочешь удалить клиента '{client_name}'?",
-            reply_markup=main_menu(),
-        )
-        await message.answer(
-            "Подтверди удаление:",
-            reply_markup=delete_confirm_menu(client_name),
-        )
-        return
-
-    await message.answer(
-        "Выбери клиента для удаления:",
-        reply_markup=main_menu(),
-    )
-    await message.answer(
-        "Список клиентов:",
-        reply_markup=delete_clients_menu(),
-    )
-
-
-@dp.message(F.text == "➕ Новый прокси")
-async def btn_newproxy(message: Message):
-    pending_actions[message.from_user.id] = "waiting_client_name"
-    await message.answer(
-        "Введи имя нового клиента.\n"
-        "Оно будет сохранено в нижнем регистре.\n"
-        "Допустимы латинские буквы (a-z), цифры, дефис и подчёркивание.",
-        reply_markup=main_menu(),
-    )
-
-
-@dp.message(F.text == "👥 Клиенты")
-async def btn_clients(message: Message):
-    await send_clients_list(message)
-
-
-@dp.message(F.text == "🌐 Домен")
-async def btn_domain(message: Message):
-    await send_domain_info(message)
-
-
-@dp.message(F.text == "🗑 Удалить")
-async def btn_delete(message: Message):
-    await message.answer(
-        "Выбери клиента для удаления:",
-        reply_markup=main_menu(),
-    )
-    await message.answer(
-        "Список клиентов:",
-        reply_markup=delete_clients_menu(),
-    )
-
-
-@dp.message(F.text == "❓ Помощь")
-async def btn_help(message: Message):
-    await send_help(message)
-
-
-@dp.callback_query(F.data == "noop")
-async def callback_noop(callback: CallbackQuery):
-    await callback.answer()
-
-
-@dp.callback_query(F.data == "cancel_delete")
-async def callback_cancel_delete(callback: CallbackQuery):
-    await callback.message.answer(
-        "Удаление отменено.",
-        reply_markup=main_menu(),
-    )
-    await callback.answer("Отменено")
-
-
-@dp.callback_query(F.data == "change_domain_manual")
-async def callback_change_domain_manual(callback: CallbackQuery):
-    pending_actions[callback.from_user.id] = "waiting_domain"
-    await callback.message.answer(
-        "Введи новый домен для генерации секретов.\n"
-        "Например: ajax.googleapis.com",
-        reply_markup=main_menu(),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("set_domain:"))
-async def callback_set_domain(callback: CallbackQuery):
-    domain = callback.data.split(":", 1)[1].strip().lower()
-
-    if not validate_domain(domain):
-        await callback.message.answer("Некорректный домен.", reply_markup=main_menu())
+# =========================
+# ПОКАЗ КЛИЕНТА
+# =========================
+@dp.callback_query(lambda c: c.data.startswith("show:"))
+async def show_client(callback: CallbackQuery):
+    name = callback.data.split(":", 1)[1]
+    protocol = get_protocol(callback.from_user.id)
+    if not protocol:
+        await callback.message.answer("Сначала выбери протокол", reply_markup=protocol_keyboard())
         await callback.answer()
         return
 
-    settings = load_settings()
-    settings["domain"] = domain
-    save_settings(settings)
+    provider = PROVIDERS[protocol]
 
-    await callback.message.answer(
-        f"Домен для новых прокси обновлён:\n{domain}\n\n"
-        "Уже созданные прокси не изменяются.",
-        reply_markup=main_menu(),
-    )
-    await callback.answer("Домен обновлён")
+    client = provider.get_client(name)
 
-
-@dp.callback_query(F.data.startswith("delete_client:"))
-async def callback_delete_client(callback: CallbackQuery):
-    client_name = callback.data.split(":", 1)[1]
-    clients = load_clients()
-
-    if client_name not in clients:
-        await callback.message.answer("Клиент не найден.", reply_markup=main_menu())
-        await callback.answer()
+    if not client:
+        await callback.answer("Не найден")
         return
 
-    await callback.message.answer(
-        f"Ты точно хочешь удалить клиента '{client_name}'?",
-        reply_markup=main_menu(),
+    if protocol in ("MTProto", "Telemt"):
+        tg_url = client.get("tg_url") or "Ссылка пока не получена"
+        text = (
+            f"Имя: {name}\n"
+            f"Порт: {client.get('port')}\n"
+            f"Домен: {client.get('domain')}\n"
+            f"Ссылка: {tg_url}"
+        )
+    else:
+        host = client.get("host")
+        port = client.get("port")
+        username = client.get("username")
+        password = client.get("password")
+
+        text = (
+            f"Имя: {name}\n"
+            f"Логин: {username}\n"
+            f"Пароль: {password}\n"
+            f"Адрес: {host}:{port}"
+        )
+
+    if protocol == "SOCKS5":
+        tg_link = f"tg://socks?server={host}&port={port}&user={username}&pass={password}"
+        text += f"\nСсылка: {tg_link}"
+
+    await callback.message.answer(text)
+    await callback.answer()
+
+
+# =========================
+# УДАЛЕНИЕ
+# =========================
+@dp.message(lambda m: m.text == "🗑 Удалить")
+async def delete_client(message: Message):
+    protocol = get_protocol(message.from_user.id)
+
+    if not protocol:
+        await message.answer("Сначала выбери протокол")
+        return
+
+    provider = PROVIDERS[protocol]
+    clients = provider.list_clients()
+
+    await message.answer(
+        "Выбери клиента для удаления:",
+        reply_markup=names_inline_keyboard(list(clients.keys()), "delete")
     )
+
+
+@dp.callback_query(lambda c: c.data.startswith("delete:"))
+async def confirm_delete(callback: CallbackQuery):
+    name = callback.data.split(":", 1)[1]
+
     await callback.message.answer(
-        "Подтверди удаление:",
-        reply_markup=delete_confirm_menu(client_name),
+        f"Удалить {name}?",
+        reply_markup=delete_confirm_keyboard(name)
     )
     await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("confirm_delete:"))
-async def callback_confirm_delete(callback: CallbackQuery):
-    client_name = callback.data.split(":", 1)[1]
+@dp.callback_query(lambda c: c.data.startswith("confirm_delete:"))
+async def delete_confirmed(callback: CallbackQuery):
+    name = callback.data.split(":", 1)[1]
+    protocol = get_protocol(callback.from_user.id)
+    if not protocol:
+        await callback.message.answer("Сначала выбери протокол", reply_markup=protocol_keyboard())
+        await callback.answer()
+        return
+
+    provider = PROVIDERS[protocol]
 
     try:
-        client = await asyncio.to_thread(delete_proxy_for_client, client_name)
-    except Exception as e:
-        await callback.message.answer(f"Ошибка удаления:\n{e}", reply_markup=main_menu())
-        await callback.answer()
-        return
+        await asyncio.to_thread(provider.delete_client, name)
+        await callback.message.answer(f"{name} удалён")
+    except ValueError as exc:
+        await callback.message.answer(f"Ошибка: {exc}")
+    except Exception:
+        logger.exception("Failed to delete %s client %s", protocol, name)
+        await callback.message.answer(
+            "Не удалось удалить клиента. Подробности записаны в журнал сервиса."
+        )
 
-    await callback.message.answer(
-        f"Клиент '{client['name']}' удалён.\n"
-        f"Контейнер {client['container_name']} остановлен и удалён.\n"
-        f"Папка {client['workdir']} удалена.",
-        reply_markup=main_menu(),
-    )
-    await callback.answer("Клиент удалён")
-
-
-@dp.callback_query(F.data.startswith("show_client:"))
-async def callback_show_client(callback: CallbackQuery):
-    client_name = callback.data.split(":", 1)[1]
-    clients = load_clients()
-
-    if client_name not in clients:
-        await callback.message.answer("Клиент не найден.", reply_markup=main_menu())
-        await callback.answer()
-        return
-
-    client = clients[client_name]
-    await callback.message.answer(
-        f"Имя пользователя: {client['name']}\n"
-        f"Порт: {client['port']}\n"
-        f"Домен: {client['domain']}\n"
-        f"Ссылка: {client['tg_url']}",
-        reply_markup=main_menu(),
-    )
     await callback.answer()
 
 
-@dp.message(F.text)
-async def handle_text(message: Message):
-    user_id = message.from_user.id
-    action = pending_actions.get(user_id)
+@dp.callback_query(lambda c: c.data == "cancel_delete")
+async def cancel_delete(callback: CallbackQuery):
+    await callback.message.answer("Удаление отменено")
+    await callback.answer()
 
-    if action == "waiting_client_name":
-        raw_name = message.text.strip()
-        client_name = normalize_name(raw_name)
 
-        if not validate_name(client_name):
-            await message.answer(
-                "Некорректное имя.\n"
-                "Используй 2–40 символов: латинские буквы (a-z), цифры, дефис, подчёркивание.\n"
-                "Имя будет приведено к нижнему регистру (только a-z).",
-                reply_markup=main_menu(),
-            )
-            return
+@dp.callback_query(lambda c: c.data == "noop")
+async def noop(callback: CallbackQuery):
+    await callback.answer()
 
-        pending_actions.pop(user_id, None)
 
-        await message.answer(
-            f"Создаю прокси для клиента '{client_name}'...",
-            reply_markup=main_menu(),
+# =========================
+# ДОМЕН
+# =========================
+@dp.message(lambda m: m.text == "🌐 Домен")
+async def domain_handler(message: Message):
+    protocol = get_protocol(message.from_user.id)
+    if protocol != "MTProto":
+        await message.answer("Настройка домена недоступна для этого протокола")
+        return
+
+    settings = load_settings()
+    current_domain = settings["mtg"]["domain"]
+    domains = [
+        "ajax.googleapis.com",
+        "cdn.jsdelivr.net",
+        "www.cloudflare.com",
+        "www.google.com",
+    ]
+    await message.answer(
+        f"Текущий домен: {current_domain}\nВыбери новый домен:",
+        reply_markup=domain_inline_keyboard(domains),
+    )
+
+
+@dp.callback_query(lambda c: c.data.startswith("set_domain:"))
+async def set_domain_callback(callback: CallbackQuery):
+    protocol = get_protocol(callback.from_user.id)
+    if protocol != "MTProto":
+        await callback.answer("Сначала выбери протокол", show_alert=True)
+        return
+
+    domain = callback.data.split(":", 1)[1].strip().lower()
+    if not _is_valid_domain(domain):
+        await callback.answer("Некорректный домен", show_alert=True)
+        return
+
+    _save_protocol_domain(protocol, domain)
+    await callback.message.answer(f"Домен для новых клиентов изменён: {domain}")
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data == "set_domain_manual")
+async def set_domain_manual(callback: CallbackQuery):
+    protocol = get_protocol(callback.from_user.id)
+    if protocol != "MTProto":
+        await callback.answer("Сначала выбери протокол", show_alert=True)
+        return
+
+    set_action(callback.from_user.id, "set_domain")
+    await callback.message.answer("Введи домен, например ajax.googleapis.com:")
+    await callback.answer()
+
+
+@dp.message(lambda m: get_action(m.from_user.id) == "set_domain")
+async def handle_domain_input(message: Message):
+    domain = message.text.strip().lower()
+    protocol = get_protocol(message.from_user.id)
+
+    if protocol != "MTProto" or not _is_valid_domain(domain):
+        await message.answer("Некорректный домен")
+        return
+
+    _save_protocol_domain(protocol, domain)
+    reset_action(message.from_user.id)
+    await message.answer(
+        f"Домен для новых клиентов изменён: {domain}",
+        reply_markup=action_keyboard(protocol),
+    )
+
+
+def _is_valid_domain(domain: str) -> bool:
+    labels = domain.split(".")
+    return (
+        3 <= len(domain) <= 253
+        and len(labels) >= 2
+        and all(
+            label
+            and len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(char.isalnum() or char == "-" for char in label)
+            for label in labels
         )
+    )
 
-        try:
-            client = await asyncio.to_thread(create_proxy_for_client, client_name)
-        except Exception as e:
-            await message.answer(f"Ошибка:\n{e}", reply_markup=main_menu())
-            return
 
+def _save_protocol_domain(protocol: str, domain: str) -> None:
+    settings = load_settings()
+    settings["mtg"]["domain"] = domain
+    save_settings(settings)
+
+
+# =========================
+# ПОМОЩЬ
+# =========================
+@dp.message(lambda m: m.text == "❓ Помощь")
+async def help_handler(message: Message):
+    protocol = get_protocol(message.from_user.id)
+
+    if not protocol:
         await message.answer(
-            f"Имя пользователя: {client['name']}\n"
-            f"Порт: {client['port']}\n"
-            f"Домен: {client['domain']}\n"
-            f"Ссылка: {client['tg_url']}",
-            reply_markup=main_menu(),
+            "Сначала выбери протокол.",
+            reply_markup=protocol_keyboard()
         )
         return
 
-    if action == "waiting_domain":
-        domain = message.text.strip().lower()
-
-        if not validate_domain(domain):
-            await message.answer("Некорректный домен.", reply_markup=main_menu())
-            return
-
-        pending_actions.pop(user_id, None)
-        settings = load_settings()
-        settings["domain"] = domain
-        save_settings(settings)
-
-        await message.answer(
-            f"Домен для новых прокси обновлён:\n{domain}\n\n"
-            "Уже созданные прокси не изменяются.",
-            reply_markup=main_menu(),
+    if protocol == "MTProto":
+        text = (
+            f"Текущий протокол: {protocol}\n\n"
+            "Доступные действия:\n"
+            "➕ Новый прокси — создать клиента\n"
+            "👥 Клиенты — показать список клиентов\n"
+            "🌐 Домен — показать или изменить домен\n"
+            "🗑 Удалить — удалить клиента\n"
+            "⬅️ Сменить протокол — вернуться к выбору протокола"
         )
-        return
+    elif protocol == "Telemt":
+        text = (
+            "Текущий протокол: Telemt\n\n"
+            "Доступные действия:\n"
+            "➕ Новый прокси — создать клиента через Telemt Control API\n"
+            "👥 Клиенты — показать список клиентов\n"
+            "🗑 Удалить — удалить клиента\n"
+            "⬅️ Сменить протокол — вернуться к выбору протокола\n\n"
+            "Домен Telemt меняется только отдельной миграцией, "
+            "иначе старые ссылки перестанут работать."
+        )
+    else:
+        text = (
+            f"Текущий протокол: {protocol}\n\n"
+            "Доступные действия:\n"
+            "➕ Новый прокси — создать клиента\n"
+            "👥 Клиенты — показать список клиентов\n"
+            "🗑 Удалить — удалить клиента\n"
+            "⬅️ Сменить протокол — вернуться к выбору протокола"
+        )
+
+    await message.answer(text, reply_markup=action_keyboard(protocol))
 
 
+# =========================
+# ЗАПУСК
+# =========================
 async def main():
-    ensure_storage()
+    settings = load_app_settings()
+    admin_middleware = AdminOnlyMiddleware(settings.admin_ids)
+    dp.message.outer_middleware(admin_middleware)
+    dp.callback_query.outer_middleware(admin_middleware)
+
+    bot = Bot(token=settings.bot_token)
     await dp.start_polling(bot)
 
 
