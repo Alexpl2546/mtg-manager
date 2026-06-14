@@ -19,7 +19,7 @@ jobs:
       - run: pip install -r requirements-dev.txt ruff
       - run: ruff check .
       - run: python -m compileall -q bot.py config.py providers utils scripts
-      - run: pytest
+      - run: python -m pytest
 
   secret-scan:
     runs-on: ubuntu-22.04
@@ -28,3 +28,5 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
