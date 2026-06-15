@@ -1,7 +1,4 @@
 {
-  "mtg": {
-    "domain": "ajax.googleapis.com"
-  },
   "telemt": {
     "domain": "www.google.com",
     "port": 8443

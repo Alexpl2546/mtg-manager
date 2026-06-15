@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from utils import storage
 
 
@@ -19,3 +21,8 @@ def test_read_json_returns_default_for_empty_file(tmp_path):
     target.write_text("", encoding="utf-8")
 
     assert storage._read_json(target, {}) == {}
+
+
+def test_mtg_protocol_is_not_supported():
+    with pytest.raises(ValueError, match="Unsupported protocol"):
+        storage.load_clients("mtg")

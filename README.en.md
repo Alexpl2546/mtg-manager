@@ -1,7 +1,7 @@
 # Proxy Manager
 
-A Telegram bot and operational toolkit for managing MTG/MTProto, Telemt, HTTP,
-and SOCKS5 proxies on a single Linux server.
+A Telegram bot and operational toolkit for managing Telemt, HTTP, and SOCKS5
+proxies on a single Linux server.
 
 Русская версия: [README.ru.md](README.ru.md)
 
@@ -19,9 +19,8 @@ must not be committed there either.
 ## Features
 
 - Bot access restricted to Telegram IDs listed in `ADMIN_IDS`.
-- Create, inspect, and delete MTG, Telemt, HTTP, and SOCKS5 clients.
-- Select Fake TLS domains for MTG and Telemt.
-- Allocate free ports to isolated MTG containers.
+- Create, inspect, and delete Telemt, HTTP, and SOCKS5 clients.
+- Configure the Fake TLS domain used by Telemt.
 - Synchronize HTTP/SOCKS5 users into a shared 3proxy configuration.
 - Manage Telemt through its official Control API without restarting it for
   every user change.
@@ -37,7 +36,6 @@ Telegram administrator
         v
      bot.py
         |
-        +-- MTGProvider ------> Docker + /opt/mtg-clients/
         +-- TelemtProvider ---> Telemt Control API
         +-- HTTPProvider -----+
         +-- SOCKS5Provider ---+-> 3proxy configuration
@@ -75,7 +73,6 @@ deletes users automatically.
 | Artifact | Purpose |
 | --- | --- |
 | `base.py` | Abstract provider contract: create, delete, get, list, and health. |
-| `mtg_manager.py` | Writes MTG configuration, starts an isolated Docker container, and removes clients. |
 | `telemt_manager.py` | Telemt Control API client, readiness checks, reconciliation, and user management. |
 | `http_manager.py` | Generates HTTP proxy credentials and updates 3proxy. |
 | `socks5_manager.py` | Generates SOCKS5 credentials and updates 3proxy. |
@@ -87,7 +84,6 @@ deletes users automatically.
 | --- | --- |
 | `auth.py` | Middleware denying Telegram users outside `ADMIN_IDS`. |
 | `keyboards.py` | Reply and inline keyboards for the bot UI. |
-| `ports.py` | Finds free MTG ports while respecting system and reserved ports. |
 | `state.py` | Small in-memory dialogue state: selected protocol and pending action. |
 | `storage.py` | Reads JSON and replaces files atomically. |
 | `threeproxy.py` | Collects users, renders configuration, and safely reloads 3proxy. |
@@ -105,9 +101,6 @@ deletes users automatically.
 | `harden-telemt.sh` | Applies systemd hardening, required capabilities, and journald link suppression. |
 | `reconcile-telemt.py` | Read-only comparison of the local index and Telemt users. |
 | `import-telemt-missing.py` | Controlled import of missing local metadata from Telemt. |
-| `install-mtproto.sh` | Installs an MTG client with isolated configuration and container. |
-| `delete-mtproto.sh` | Removes an MTG container and its files. |
-| `archive-legacy-proxy.sh` | Archives a legacy proxy installation before migration. |
 
 ### `data/`
 
@@ -119,7 +112,6 @@ The application creates these runtime files:
 
 | File | Contents |
 | --- | --- |
-| `mtg_clients.json` | MTG client metadata and allocated ports. |
 | `telemt_clients.json` | Local Telemt user and connection-link index. |
 | `http_clients.json` | HTTP proxy names, usernames, and passwords. |
 | `socks5_clients.json` | SOCKS5 names, usernames, and passwords. |
@@ -151,7 +143,6 @@ All live files can contain secrets and are excluded from Git.
 | Local client metadata | Proxy Manager | `/opt/proxy-manager/data/*.json` |
 | Telemt users and secrets | Telemt | `/etc/telemt/telemt.toml` |
 | HTTP/SOCKS5 runtime | 3proxy | `/etc/3proxy/3proxy.cfg` |
-| MTG client configuration | MTG provider | `/opt/mtg-clients/<name>/` |
 | Proxy Manager backups | Deploy script | `/var/backups/proxy-manager/<timestamp>/` |
 | Telemt backups | Upgrade script | `/var/backups/telemt/<timestamp>/` |
 

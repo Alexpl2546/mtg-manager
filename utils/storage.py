@@ -8,7 +8,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 
 FILES = {
-    "mtg": DATA_DIR / "mtg_clients.json",
     "telemt": DATA_DIR / "telemt_clients.json",
     "http": DATA_DIR / "http_clients.json",
     "socks5": DATA_DIR / "socks5_clients.json",
@@ -42,13 +41,13 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 def load_clients(protocol: str) -> dict:
-    if protocol not in ("mtg", "telemt", "http", "socks5"):
+    if protocol not in ("telemt", "http", "socks5"):
         raise ValueError(f"Unsupported protocol: {protocol}")
     return _read_json(FILES[protocol], {})
 
 
 def save_clients(protocol: str, data: dict) -> None:
-    if protocol not in ("mtg", "telemt", "http", "socks5"):
+    if protocol not in ("telemt", "http", "socks5"):
         raise ValueError(f"Unsupported protocol: {protocol}")
     _write_json(FILES[protocol], data)
 

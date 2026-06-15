@@ -33,7 +33,6 @@ from pathlib import Path
 
 data_dir = Path(sys.argv[1])
 for filename in (
-    "mtg_clients.json",
     "telemt_clients.json",
     "http_clients.json",
     "socks5_clients.json",

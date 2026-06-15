@@ -10,7 +10,6 @@ __pycache__/
 telemt-audit.txt
 
 data/*.json
-data/mtg-clients/
 *.bak
 *.tmp
 *~

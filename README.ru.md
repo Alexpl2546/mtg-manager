@@ -1,7 +1,7 @@
 # Proxy Manager
 
-Telegram-бот и набор операционных инструментов для управления MTG/MTProto,
-Telemt, HTTP- и SOCKS5-прокси на одном Linux-сервере.
+Telegram-бот и набор операционных инструментов для управления Telemt, HTTP-
+и SOCKS5-прокси на одном Linux-сервере.
 
 English version: [README.en.md](README.en.md)
 
@@ -19,9 +19,8 @@ production-секретов, реальных клиентских баз, VPS-�
 ## Возможности
 
 - Доступ к боту только для Telegram ID из `ADMIN_IDS`.
-- Создание, просмотр и удаление клиентов MTG, Telemt, HTTP и SOCKS5.
-- Выбор Fake TLS-домена для MTG и Telemt.
-- Выделение свободных портов для отдельных MTG-контейнеров.
+- Создание, просмотр и удаление клиентов Telemt, HTTP и SOCKS5.
+- Настройка Fake TLS-домена для Telemt.
 - Синхронизация пользователей HTTP/SOCKS5 с общей конфигурацией 3proxy.
 - Работа с Telemt через официальный Control API без перезапуска при каждом
   изменении пользователя.
@@ -37,7 +36,6 @@ Telegram administrator
         v
      bot.py
         |
-        +-- MTGProvider ------> Docker + /opt/mtg-clients/
         +-- TelemtProvider ---> Telemt Control API
         +-- HTTPProvider -----+
         +-- SOCKS5Provider ---+-> 3proxy configuration
@@ -75,7 +73,6 @@ Telemt является источником истины для своих по
 | Артефакт | Назначение |
 | --- | --- |
 | `base.py` | Абстрактный интерфейс provider: create, delete, get, list и health. |
-| `mtg_manager.py` | Создание MTG-конфигурации, запуск отдельного Docker-контейнера и удаление клиента. |
 | `telemt_manager.py` | HTTP-клиент Telemt Control API, readiness, reconciliation и управление пользователями. |
 | `http_manager.py` | Генерация учётных данных HTTP-прокси и обновление 3proxy. |
 | `socks5_manager.py` | Генерация учётных данных SOCKS5 и обновление 3proxy. |
@@ -87,7 +84,6 @@ Telemt является источником истины для своих по
 | --- | --- |
 | `auth.py` | Middleware, запрещающий доступ Telegram-пользователям вне `ADMIN_IDS`. |
 | `keyboards.py` | Reply- и inline-клавиатуры интерфейса бота. |
-| `ports.py` | Поиск свободного MTG-порта с учётом системных и зарезервированных портов. |
 | `state.py` | Небольшое in-memory состояние диалога: выбранный протокол и действие. |
 | `storage.py` | Чтение и атомарная замена JSON-файлов. |
 | `threeproxy.py` | Сбор пользователей, генерация конфигурации и безопасная перезагрузка 3proxy. |
@@ -105,9 +101,6 @@ Telemt является источником истины для своих по
 | `harden-telemt.sh` | Systemd hardening, необходимые capabilities и отключение вывода ссылок в journald. |
 | `reconcile-telemt.py` | Read-only сравнение локального индекса с пользователями Telemt. |
 | `import-telemt-missing.py` | Контролируемый импорт отсутствующих локальных метаданных из Telemt. |
-| `install-mtproto.sh` | Установка MTG-клиента с отдельной конфигурацией и контейнером. |
-| `delete-mtproto.sh` | Удаление MTG-контейнера и его файлов. |
-| `archive-legacy-proxy.sh` | Архивация устаревшей proxy-установки перед миграцией. |
 
 ### `data/`
 
@@ -119,7 +112,6 @@ Fake TLS-домены, публичные host и порты HTTP/SOCKS5. Раб
 
 | Файл | Содержимое |
 | --- | --- |
-| `mtg_clients.json` | Метаданные MTG-клиентов и выделенные порты. |
 | `telemt_clients.json` | Локальный индекс Telemt-пользователей и ссылок. |
 | `http_clients.json` | Имена, логины и пароли HTTP-прокси. |
 | `socks5_clients.json` | Имена, логины и пароли SOCKS5-прокси. |
@@ -151,7 +143,6 @@ Fake TLS-домены, публичные host и порты HTTP/SOCKS5. Раб
 | Локальные метаданные клиентов | Proxy Manager | `/opt/proxy-manager/data/*.json` |
 | Пользователи и секреты Telemt | Telemt | `/etc/telemt/telemt.toml` |
 | HTTP/SOCKS5 runtime | 3proxy | `/etc/3proxy/3proxy.cfg` |
-| Конфигурация MTG-клиентов | MTG provider | `/opt/mtg-clients/<name>/` |
 | Backup Proxy Manager | deploy script | `/var/backups/proxy-manager/<timestamp>/` |
 | Backup Telemt | upgrade script | `/var/backups/telemt/<timestamp>/` |
 
