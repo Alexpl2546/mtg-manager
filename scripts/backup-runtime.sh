@@ -15,7 +15,6 @@ mkdir -p "$destination"
 
 for filename in \
   settings.json \
-  mtg_clients.json \
   telemt_clients.json \
   http_clients.json \
   socks5_clients.json

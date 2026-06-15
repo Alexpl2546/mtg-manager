@@ -6,7 +6,6 @@ from aiogram.types import (
 )
 
 PROTOCOL_LABELS = {
-    "mtg": "MTProto",
     "telemt": "Telemt",
     "http": "HTTP",
     "socks5": "SOCKS5",
@@ -16,7 +15,7 @@ PROTOCOL_LABELS = {
 def protocol_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="MTProto"), KeyboardButton(text="Telemt")],
+            [KeyboardButton(text="Telemt")],
             [KeyboardButton(text="HTTP"), KeyboardButton(text="SOCKS5")],
         ],
         resize_keyboard=True,
@@ -28,9 +27,6 @@ def action_keyboard(protocol: str | None) -> ReplyKeyboardMarkup:
     rows = [
         [KeyboardButton(text="➕ Новый прокси"), KeyboardButton(text="👥 Клиенты")],
     ]
-
-    if protocol == "MTProto":
-        rows.append([KeyboardButton(text="🌐 Домен")])
 
     rows.append([KeyboardButton(text="🗑 Удалить"), KeyboardButton(text="❓ Помощь")])
     rows.append([KeyboardButton(text="⬅️ Сменить протокол")])
@@ -56,17 +52,6 @@ def names_inline_keyboard(
         [InlineKeyboardButton(text=name, callback_data=f"{prefix}:{name}")]
         for name in sorted(names)
     ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def domain_inline_keyboard(domains: list[str]) -> InlineKeyboardMarkup:
-    buttons = [
-        [InlineKeyboardButton(text=domain, callback_data=f"set_domain:{domain}")]
-        for domain in domains
-    ]
-    buttons.append(
-        [InlineKeyboardButton(text="✏️ Ввести домен вручную", callback_data="set_domain_manual")]
-    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

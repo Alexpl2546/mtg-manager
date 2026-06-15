@@ -59,7 +59,6 @@ trap cleanup EXIT
 echo "Validating runtime JSON..."
 runtime_files=(
   "settings.json"
-  "mtg_clients.json"
   "telemt_clients.json"
   "http_clients.json"
   "socks5_clients.json"
@@ -77,16 +76,6 @@ for filename in "${runtime_files[@]}"; do
     echo "Invalid runtime JSON: $path" >&2
     exit 1
   }
-done
-
-for legacy_path in \
-  "$INSTALL_DIR/data/mtproto_clients.json" \
-  "$INSTALL_DIR/data/mtproto_clients_backup.json" \
-  "$INSTALL_DIR/data/mtg_clients_backup.json"
-do
-  if [[ -e "$legacy_path" ]]; then
-    echo "Legacy file preserved without import: $legacy_path"
-  fi
 done
 
 echo "Creating backup..."
@@ -151,6 +140,33 @@ if [[ -d "$INSTALL_DIR/venv" ]]; then
 fi
 mv -- "$new_venv" "$INSTALL_DIR/venv"
 tar -xzf "$ARCHIVE_PATH" -C "$INSTALL_DIR"
+rm -f -- \
+  "$INSTALL_DIR/providers/mtg_manager.py" \
+  "$INSTALL_DIR/scripts/install-mtproto.sh" \
+  "$INSTALL_DIR/scripts/delete-mtproto.sh" \
+  "$INSTALL_DIR/scripts/archive-legacy-proxy.sh" \
+  "$INSTALL_DIR/utils/ports.py" \
+  "$INSTALL_DIR/data/mtg_clients.json" \
+  "$INSTALL_DIR/data/mtproto_clients.json" \
+  "$INSTALL_DIR/data/mtproto_clients_backup.json" \
+  "$INSTALL_DIR/data/mtg_clients_backup.json"
+rm -rf -- "$INSTALL_DIR/data/mtg-clients"
+python3 - "$INSTALL_DIR/data/settings.json" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+settings = json.loads(path.read_text(encoding="utf-8"))
+if settings.pop("mtg", None) is not None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_path, path)
+PY
 chmod +x "$INSTALL_DIR"/scripts/*.sh 2>/dev/null || true
 
 mkdir -p "$override_dir"

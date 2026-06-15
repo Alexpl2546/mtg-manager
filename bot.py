@@ -7,14 +7,12 @@ from aiogram.types import CallbackQuery, Message
 
 from config import load_settings as load_app_settings
 from providers.http_manager import HTTPProvider
-from providers.mtg_manager import MTGProvider
 from providers.socks5_manager import SOCKS5Provider
 from providers.telemt_manager import TelemtProvider
 from utils.auth import AdminOnlyMiddleware
 from utils.keyboards import (
     action_keyboard,
     delete_confirm_keyboard,
-    domain_inline_keyboard,
     names_inline_keyboard,
     protocol_keyboard,
 )
@@ -25,7 +23,6 @@ from utils.state import (
     set_action,
     set_protocol,
 )
-from utils.storage import load_settings, save_settings
 from utils.validation import normalize_client_name, validate_client_name
 
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +31,6 @@ logger = logging.getLogger(__name__)
 dp = Dispatcher()
 
 PROVIDERS = {
-    "MTProto": MTGProvider(),
     "Telemt": TelemtProvider(),
     "HTTP": HTTPProvider(),
     "SOCKS5": SOCKS5Provider(),
@@ -128,7 +124,7 @@ async def handle_create(message: Message):
 
     reset_action(message.from_user.id)
 
-    if protocol in ("MTProto", "Telemt"):
+    if protocol == "Telemt":
         tg_url = client.get("tg_url") or "Ссылка пока не получена"
         text = (
             f"Имя: {name}\n"
@@ -195,7 +191,7 @@ async def show_client(callback: CallbackQuery):
         await callback.answer("Не найден")
         return
 
-    if protocol in ("MTProto", "Telemt"):
+    if protocol == "Telemt":
         tg_url = client.get("tg_url") or "Ссылка пока не получена"
         text = (
             f"Имя: {name}\n"
@@ -292,98 +288,6 @@ async def noop(callback: CallbackQuery):
 
 
 # =========================
-# ДОМЕН
-# =========================
-@dp.message(lambda m: m.text == "🌐 Домен")
-async def domain_handler(message: Message):
-    protocol = get_protocol(message.from_user.id)
-    if protocol != "MTProto":
-        await message.answer("Настройка домена недоступна для этого протокола")
-        return
-
-    settings = load_settings()
-    current_domain = settings["mtg"]["domain"]
-    domains = [
-        "ajax.googleapis.com",
-        "cdn.jsdelivr.net",
-        "www.cloudflare.com",
-        "www.google.com",
-    ]
-    await message.answer(
-        f"Текущий домен: {current_domain}\nВыбери новый домен:",
-        reply_markup=domain_inline_keyboard(domains),
-    )
-
-
-@dp.callback_query(lambda c: c.data.startswith("set_domain:"))
-async def set_domain_callback(callback: CallbackQuery):
-    protocol = get_protocol(callback.from_user.id)
-    if protocol != "MTProto":
-        await callback.answer("Сначала выбери протокол", show_alert=True)
-        return
-
-    domain = callback.data.split(":", 1)[1].strip().lower()
-    if not _is_valid_domain(domain):
-        await callback.answer("Некорректный домен", show_alert=True)
-        return
-
-    _save_protocol_domain(protocol, domain)
-    await callback.message.answer(f"Домен для новых клиентов изменён: {domain}")
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data == "set_domain_manual")
-async def set_domain_manual(callback: CallbackQuery):
-    protocol = get_protocol(callback.from_user.id)
-    if protocol != "MTProto":
-        await callback.answer("Сначала выбери протокол", show_alert=True)
-        return
-
-    set_action(callback.from_user.id, "set_domain")
-    await callback.message.answer("Введи домен, например ajax.googleapis.com:")
-    await callback.answer()
-
-
-@dp.message(lambda m: get_action(m.from_user.id) == "set_domain")
-async def handle_domain_input(message: Message):
-    domain = message.text.strip().lower()
-    protocol = get_protocol(message.from_user.id)
-
-    if protocol != "MTProto" or not _is_valid_domain(domain):
-        await message.answer("Некорректный домен")
-        return
-
-    _save_protocol_domain(protocol, domain)
-    reset_action(message.from_user.id)
-    await message.answer(
-        f"Домен для новых клиентов изменён: {domain}",
-        reply_markup=action_keyboard(protocol),
-    )
-
-
-def _is_valid_domain(domain: str) -> bool:
-    labels = domain.split(".")
-    return (
-        3 <= len(domain) <= 253
-        and len(labels) >= 2
-        and all(
-            label
-            and len(label) <= 63
-            and label[0].isalnum()
-            and label[-1].isalnum()
-            and all(char.isalnum() or char == "-" for char in label)
-            for label in labels
-        )
-    )
-
-
-def _save_protocol_domain(protocol: str, domain: str) -> None:
-    settings = load_settings()
-    settings["mtg"]["domain"] = domain
-    save_settings(settings)
-
-
-# =========================
 # ПОМОЩЬ
 # =========================
 @dp.message(lambda m: m.text == "❓ Помощь")
@@ -397,17 +301,7 @@ async def help_handler(message: Message):
         )
         return
 
-    if protocol == "MTProto":
-        text = (
-            f"Текущий протокол: {protocol}\n\n"
-            "Доступные действия:\n"
-            "➕ Новый прокси — создать клиента\n"
-            "👥 Клиенты — показать список клиентов\n"
-            "🌐 Домен — показать или изменить домен\n"
-            "🗑 Удалить — удалить клиента\n"
-            "⬅️ Сменить протокол — вернуться к выбору протокола"
-        )
-    elif protocol == "Telemt":
+    if protocol == "Telemt":
         text = (
             "Текущий протокол: Telemt\n\n"
             "Доступные действия:\n"

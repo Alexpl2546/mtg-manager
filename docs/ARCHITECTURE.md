@@ -3,7 +3,7 @@
 ## Components
 
 - `bot.py` contains Telegram handlers and delegates protocol operations.
-- `providers/` implements MTG, Telemt, HTTP, and SOCKS5 backends.
+- `providers/` implements Telemt, HTTP, and SOCKS5 backends.
 - `utils/storage.py` stores runtime metadata using atomic JSON replacement.
 - `utils/threeproxy.py` renders and activates HTTP/SOCKS5 configuration.
 - `scripts/` contains audited operational, backup, migration, and deployment tools.
@@ -16,7 +16,6 @@
 | Client metadata | Proxy Manager | `/opt/proxy-manager/data/*.json` |
 | Telemt users and secrets | Telemt | `/etc/telemt/telemt.toml` |
 | HTTP/SOCKS5 runtime config | 3proxy | `/etc/3proxy/3proxy.cfg` |
-| MTG per-client config | MTG provider | `/opt/mtg-clients/<name>/config.toml` |
 
 Runtime data is not source code and must not be committed.
 

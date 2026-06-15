@@ -1,13 +1,13 @@
 # Proxy Manager
 
-Telegram-бот для управления MTProto/MTG, Telemt, HTTP и SOCKS5-прокси.
+Telegram-бот для управления Telemt, HTTP и SOCKS5-прокси.
 
 ## Безопасность
 
 - Доступ разрешён только Telegram ID из `ADMIN_IDS`.
 - Токены, клиентские базы и прокси-секреты не хранятся в Git.
 - Рабочие JSON-файлы записываются атомарно.
-- Сервису необходим ограниченный доступ к Docker, systemd, Telemt и 3proxy.
+- Сервису необходим ограниченный доступ к systemd, Telemt и 3proxy.
 
 ## Конфигурация
 
@@ -69,7 +69,6 @@ sudo bash scripts/harden-telemt.sh
 
 Рабочие файлы создаются в `data/`:
 
-- `mtg_clients.json`
 - `telemt_clients.json`
 - `http_clients.json`
 - `socks5_clients.json`

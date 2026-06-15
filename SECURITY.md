@@ -12,7 +12,7 @@ The following must never be committed:
 
 - `.env`
 - runtime `data/*.json`
-- Telemt and MTG configuration files
+- Telemt configuration files
 - generated proxy links
 - VPS audit archives and logs
 
