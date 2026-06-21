@@ -4,6 +4,10 @@
 
 - `bot.py` contains Telegram handlers and delegates protocol operations.
 - `providers/` implements Telemt, HTTP, and SOCKS5 backends.
+- `vpn_service/` contains shared user-facing VPN configuration issuing logic
+  for VLESS Reality and AmneziaWG.
+- `web/` contains the Next.js user cabinet and proxies API calls to
+  `vpn_service.api` when `VPN_BACKEND_URL` is configured.
 - `utils/storage.py` stores runtime metadata using atomic JSON replacement.
 - `utils/threeproxy.py` renders and activates HTTP/SOCKS5 configuration.
 - `scripts/` contains audited operational, backup, migration, and deployment tools.
